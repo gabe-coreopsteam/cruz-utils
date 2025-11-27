@@ -1,6 +1,13 @@
-import React, { useState } from 'react';
-// Note: 'react-native' imports will show an error in this web-based
-// preview environment. This code is correct for a real React Native project.
+/**
+ * App.tsx
+ * 
+ * VSIX Downloader - A native macOS app to download VS Code extensions
+ * from the Microsoft Marketplace.
+ * 
+ * Part of CruzUtils - Tools for the DevOps Community
+ */
+
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,46 +16,68 @@ import {
   StyleSheet,
   SafeAreaView,
   StatusBar,
-  ActivityIndicator,
   GestureResponderEvent,
 } from 'react-native';
-import RNFS from 'react-native-fs';
+
+// Utilities
+import { getExtensionDetails, generateFileName } from './src/utils/marketplace';
+import { downloadFile, formatFileSize, DownloadProgress } from './src/utils/downloader';
+import { useAppSettings } from './src/hooks/useAppSettings';
+
+// Components
+import { SettingsPage } from './src/components/SettingsPage';
 
 // --- Type Definitions ---
-type Page = 'downloader' | 'about';
+type Page = 'downloader' | 'settings' | 'about';
 type Theme = 'light' | 'dark';
+
 interface MessageState {
-  type: 'info' | 'success' | 'error' | '';
+  type: 'info' | 'success' | 'error' | 'progress' | '';
   text: string;
+  progress?: number; // 0-100
 }
 
 // --- Page Definitions ---
 const PAGE_DOWNLOADER: Page = 'downloader';
+const PAGE_SETTINGS: Page = 'settings';
 const PAGE_ABOUT: Page = 'about';
 
-// --- Icon Components (Mocked as Text) ---
-// In a real app, you'd use @expo/vector-icons or react-native-svg
-const DownloadIcon = () => <Text style={styles.icon}>D</Text>;
-const InfoIcon = () => <Text style={styles.icon}>i</Text>;
-const MoonIcon = () => <Text style={styles.icon}>M</Text>;
-const SunIcon = () => <Text style={styles.icon}>S</Text>;
-const AlertIcon = () => <Text style={styles.icon}>!</Text>;
-const CheckIcon = () => <Text style={styles.icon}>✓</Text>;
+// --- Icon Components ---
+// Using text-based icons for simplicity. In production, use react-native-vector-icons
+const DownloadIcon = ({ style }: { style?: object }) => <Text style={style}>↓</Text>;
+const SettingsIcon = ({ style }: { style?: object }) => <Text style={style}>⚙</Text>;
+const InfoIcon = ({ style }: { style?: object }) => <Text style={style}>ℹ</Text>;
+const MoonIcon = ({ style }: { style?: object }) => <Text style={style}>☾</Text>;
+const SunIcon = ({ style }: { style?: object }) => <Text style={style}>☀</Text>;
+const AlertIcon = () => <Text style={iconStyles.alert}>⚠</Text>;
+const CheckIcon = () => <Text style={iconStyles.success}>✓</Text>;
+const SpinnerIcon = () => <Text style={iconStyles.info}>◌</Text>;
 
-// --- App Component ---
+const iconStyles = StyleSheet.create({
+  alert: { fontSize: 18, color: '#ef4444' },
+  success: { fontSize: 18, color: '#10b981' },
+  info: { fontSize: 18, color: '#3b82f6' },
+});
+
+// --- Main App Component ---
 const App = () => {
   const [page, setPage] = useState<Page>(PAGE_DOWNLOADER);
   const [theme, setTheme] = useState<Theme>('light');
+  
+  // Settings hook
+  const { settings, updateSetting, resetSettings } = useAppSettings();
 
-  const toggleTheme = () => {
+  const toggleTheme = useCallback(() => {
     setTheme(prevTheme => (prevTheme === 'light' ? 'dark' : 'light'));
-  };
+  }, []);
 
   const isDark = theme === 'dark';
+  
   const containerStyles = [
     styles.appContainer,
     isDark ? styles.containerDark : styles.containerLight,
   ];
+  
   const navStyles = [
     styles.sidebar,
     isDark ? styles.sidebarDark : styles.sidebarLight,
@@ -65,24 +94,48 @@ const App = () => {
             active={page === PAGE_DOWNLOADER}
             onPress={() => setPage(PAGE_DOWNLOADER)}
             isDark={isDark}
+            title="Downloader"
+          />
+          <NavButton
+            icon={<SettingsIcon />}
+            active={page === PAGE_SETTINGS}
+            onPress={() => setPage(PAGE_SETTINGS)}
+            isDark={isDark}
+            title="Settings"
           />
           <NavButton
             icon={<InfoIcon />}
             active={page === PAGE_ABOUT}
             onPress={() => setPage(PAGE_ABOUT)}
             isDark={isDark}
+            title="About"
           />
+          
+          {/* Spacer */}
           <View style={{ flex: 1 }} />
+          
+          {/* Theme Toggle */}
           <NavButton
             icon={isDark ? <SunIcon /> : <MoonIcon />}
             onPress={toggleTheme}
             isDark={isDark}
+            title={isDark ? 'Light Mode' : 'Dark Mode'}
           />
         </View>
 
         {/* --- Page Content --- */}
         <View style={styles.mainContent}>
-          {page === PAGE_DOWNLOADER && <DownloaderPage isDark={isDark} />}
+          {page === PAGE_DOWNLOADER && (
+            <DownloaderPage isDark={isDark} downloadPath={settings.downloadPath} />
+          )}
+          {page === PAGE_SETTINGS && (
+            <SettingsPage
+              isDark={isDark}
+              settings={settings}
+              onUpdateSetting={updateSetting}
+              onResetSettings={resetSettings}
+            />
+          )}
           {page === PAGE_ABOUT && <AboutPage isDark={isDark} />}
         </View>
       </View>
@@ -96,9 +149,10 @@ interface NavButtonProps {
   active?: boolean;
   onPress: (event: GestureResponderEvent) => void;
   isDark: boolean;
+  title?: string;
 }
 
-const NavButton = ({ icon, active, onPress, isDark }: NavButtonProps) => {
+const NavButton = ({ icon, active, onPress, isDark, title }: NavButtonProps) => {
   const btnStyles = [
     styles.navButton,
     active
@@ -107,19 +161,20 @@ const NavButton = ({ icon, active, onPress, isDark }: NavButtonProps) => {
       ? styles.navButtonDark
       : styles.navButtonLight,
   ];
-  const iconStyles = [
-    styles.icon,
-    active
-      ? styles.navIconActive
-      : isDark
-      ? styles.navIconDark
-      : styles.navIconLight,
-  ];
+  
+  const iconStyle = {
+    fontSize: 24,
+    color: active ? '#fff' : isDark ? '#d1d5db' : '#4b5563',
+  };
 
-  // We clone the element to pass in the computed style
   return (
-    <TouchableOpacity onPress={onPress} style={btnStyles}>
-      {React.cloneElement(icon, { style: iconStyles })}
+    <TouchableOpacity 
+      onPress={onPress} 
+      style={btnStyles}
+      accessibilityLabel={title}
+      accessibilityRole="button"
+    >
+      {React.cloneElement(icon, { style: iconStyle })}
     </TouchableOpacity>
   );
 };
@@ -129,106 +184,98 @@ interface PageProps {
   isDark: boolean;
 }
 
-// --- 1. Downloader Page Component ---
-const DownloaderPage = ({ isDark }: PageProps) => {
+interface DownloaderPageProps extends PageProps {
+  downloadPath: string;
+}
+
+// --- Downloader Page Component ---
+const DownloaderPage = ({ isDark, downloadPath }: DownloaderPageProps) => {
   const [url, setUrl] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<MessageState>({ type: '', text: '' });
 
-  const handleDownload = async () => {
+  const handleDownload = useCallback(async () => {
+    if (!url.trim()) {
+      setMessage({ type: 'error', text: 'Please enter a marketplace URL.' });
+      return;
+    }
+
     setIsLoading(true);
-    setMessage({ type: 'info', text: 'Initializing...' });
+    setMessage({ type: 'info', text: 'Validating URL...' });
 
     try {
-      // --- 1. Parse Publisher and Extension Name ---
-      let publisher, extensionName;
-      try {
-        // Basic validation
-        if (!url.includes('marketplace.visualstudio.com')) {
-           throw new Error('Not a valid Visual Studio Marketplace URL.');
-        }
-
-        // Extract query params manually since URL object might be polyfilled differently in RN
-        const queryString = url.split('?')[1];
-        if (!queryString) throw new Error('No query parameters found.');
-        
-        const params = new URLSearchParams(queryString);
-        const itemName = params.get('itemName');
-        
-        if (!itemName || !itemName.includes('.')) {
-          throw new Error("Invalid URL. Does not contain valid 'itemName' parameter.");
-        }
-        [publisher, extensionName] = itemName.split('.');
-      } catch (e) {
-        throw new Error((e as Error).message || 'Invalid Marketplace URL.');
-      }
-
-      // --- 2. Fetch Page Content to Find Version ---
-      setMessage({ type: 'info', text: `Fetching info for ${extensionName}...` });
-      
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch page. Status: ${response.status}`);
-      }
-      
-      const pageContent = await response.text();
-      
-      // --- 3. Find Version using Regex ---
-      // Look for "version":"1.2.3"
-      const versionMatch = pageContent.match(/"version":"([\d\.]+)"/);
-      
-      if (!versionMatch || !versionMatch[1]) {
-        throw new Error('Could not find version information on the page. The marketplace structure may have changed.');
-      }
-      
-      const version = versionMatch[1];
-      setMessage({ type: 'info', text: `Found version: ${version}. Starting download...` });
-
-      // --- 4. Construct Final URL ---
-      const downloadUrl = `https://marketplace.visualstudio.com/_apis/public/gallery/publishers/${publisher}/vsextensions/${extensionName}/${version}/vspackage`;
-
-      // --- 5. Download File ---
-      const fileName = `${extensionName}-${version}.vsix`;
-      // For macOS, we save to the user's Downloads folder
-      // RNFS.DownloadDirectoryPath points to ~/Downloads on macOS
-      const downloadDest = `${RNFS.DownloadDirectoryPath || RNFS.DocumentDirectoryPath}/${fileName}`;
-
-      const downloadResult = RNFS.downloadFile({
-        fromUrl: downloadUrl,
-        toFile: downloadDest,
-        begin: (res) => {
-           console.log('Download has begun', res);
-        },
-        progress: (res) => {
-           const progress = (res.bytesWritten / res.contentLength) * 100;
-           console.log(`Progress: ${progress.toFixed(0)}%`);
-        }
+      // Step 1: Get extension details (parses URL, fetches version)
+      const extensionResult = await getExtensionDetails(url, (msg) => {
+        setMessage({ type: 'info', text: msg });
       });
 
-      const result = await downloadResult.promise;
-
-      if (result.statusCode === 200) {
-        setMessage({ 
-          type: 'success', 
-          text: `Success! Downloaded to: ${downloadDest}` 
-        });
-        setUrl(''); // Clear input on success
-      } else {
-        throw new Error(`Download failed with status code: ${result.statusCode}`);
+      if (!extensionResult.success || !extensionResult.data) {
+        throw new Error(extensionResult.error || 'Failed to get extension details.');
       }
 
-    } catch (e) {
-      const error = e as Error;
-      console.error(error);
+      const { extensionName, version, downloadUrl } = extensionResult.data;
+      const fileName = generateFileName(extensionName, version);
+
+      // Step 2: Start download with progress
       setMessage({ 
-        type: 'error', 
-        text: `Error: ${error.message}` 
+        type: 'progress', 
+        text: `Downloading ${fileName}...`, 
+        progress: 0 
+      });
+
+      const downloadResult = await downloadFile({
+        url: downloadUrl,
+        fileName,
+        downloadPath,
+        onBegin: () => {
+          setMessage({ 
+            type: 'progress', 
+            text: `Downloading ${fileName}...`, 
+            progress: 0 
+          });
+        },
+        onProgress: (progress: DownloadProgress) => {
+          const sizeInfo = progress.contentLength > 0
+            ? ` (${formatFileSize(progress.bytesWritten)} / ${formatFileSize(progress.contentLength)})`
+            : '';
+          
+          setMessage({
+            type: 'progress',
+            text: `Downloading ${fileName}${sizeInfo}`,
+            progress: progress.percentage,
+          });
+        },
+      });
+
+      if (!downloadResult.success) {
+        throw new Error(downloadResult.error || 'Download failed.');
+      }
+
+      // Success!
+      const sizeInfo = downloadResult.fileSize 
+        ? ` (${formatFileSize(downloadResult.fileSize)})`
+        : '';
+      
+      setMessage({
+        type: 'success',
+        text: `✓ Downloaded successfully!${sizeInfo}\n${downloadResult.filePath}`,
+      });
+      
+      setUrl(''); // Clear input on success
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
+      console.error('[Downloader] Error:', error);
+      setMessage({
+        type: 'error',
+        text: errorMessage,
       });
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [url, downloadPath]);
 
+  // Themed styles
   const pageStyles = [
     styles.pageContainer,
     isDark ? styles.pageContainerDark : styles.pageContainerLight,
@@ -244,40 +291,62 @@ const DownloaderPage = ({ isDark }: PageProps) => {
     <View style={pageStyles}>
       <Text style={titleStyles}>VSIX Downloader</Text>
       <Text style={textStyles}>
-        Paste the VSCode Marketplace URL below to download the `.vsix` file.
+        Paste a VS Code Marketplace URL below to download the extension as a .vsix file.
       </Text>
 
       <TextInput
         value={url}
         onChangeText={setUrl}
-        placeholder="https://marketplace.visualstudio.com/..."
-        placeholderTextColor={isDark ? '#888' : '#aaa'}
+        placeholder="https://marketplace.visualstudio.com/items?itemName=publisher.extension"
+        placeholderTextColor={isDark ? '#6b7280' : '#9ca3af'}
         style={inputStyles}
         editable={!isLoading}
         autoCapitalize="none"
         autoCorrect={false}
+        selectTextOnFocus
       />
 
       <TouchableOpacity
         onPress={handleDownload}
-        disabled={isLoading || !url}
-        style={[styles.button, (isLoading || !url) && styles.buttonDisabled]}
+        disabled={isLoading || !url.trim()}
+        style={[
+          styles.button,
+          (isLoading || !url.trim()) && styles.buttonDisabled,
+        ]}
+        accessibilityLabel="Download extension"
+        accessibilityRole="button"
       >
-        {isLoading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Download .vsix</Text>
-        )}
+        <Text style={styles.buttonText}>
+          {isLoading ? 'Downloading...' : 'Download .vsix'}
+        </Text>
       </TouchableOpacity>
 
+      {/* Progress Bar (shown during download) */}
+      {message.type === 'progress' && typeof message.progress === 'number' && (
+        <View style={styles.progressContainer}>
+          <View style={styles.progressBar}>
+            <View 
+              style={[
+                styles.progressFill,
+                { width: `${message.progress}%` },
+              ]} 
+            />
+          </View>
+          <Text style={[styles.progressText, isDark && styles.progressTextDark]}>
+            {message.progress}%
+          </Text>
+        </View>
+      )}
+
+      {/* Message Display */}
       {message.text && (
-        <Message type={message.type} text={message.text} isDark={isDark} />
+        <MessageBox type={message.type} text={message.text} isDark={isDark} />
       )}
     </View>
   );
 };
 
-// --- 2. About Page Component ---
+// --- About Page Component ---
 const AboutPage = ({ isDark }: PageProps) => {
   const pageStyles = [
     styles.pageContainer,
@@ -289,142 +358,193 @@ const AboutPage = ({ isDark }: PageProps) => {
 
   return (
     <View style={pageStyles}>
-      <Text style={titleStyles}>About This Tool</Text>
+      <Text style={titleStyles}>About VSIX Downloader</Text>
+      
       <Text style={textStyles}>
-        This is a native utility to download VSCode extensions directly from the marketplace.
+        A native macOS utility to download Visual Studio Code extensions directly 
+        from the Microsoft Marketplace. Part of the CruzUtils toolkit.
       </Text>
 
       <Text style={headingStyles}>How It Works</Text>
       <Text style={textStyles}>
-        1. It parses the publisher and extension name from the URL.
-        {'\n'}2. It fetches the marketplace page to find the latest version.
-        {'\n'}3. It constructs the official download link.
-        {'\n'}4. It downloads the .vsix file to your device's storage.
+        1. Paste a Marketplace URL (e.g., marketplace.visualstudio.com/items?itemName=...)
+        {'\n'}2. The app validates the URL and extracts the publisher/extension info
+        {'\n'}3. It fetches the latest version from the Marketplace
+        {'\n'}4. It downloads the .vsix file to your configured location
       </Text>
 
-      <Text style={headingStyles}>Storage Location</Text>
+      <Text style={headingStyles}>Why Native?</Text>
       <Text style={textStyles}>
-        Files are saved to your ~/Downloads folder by default.
+        Browser-based tools face CORS restrictions when fetching from the Marketplace.
+        This native app bypasses those restrictions, providing a seamless experience.
+      </Text>
+
+      <Text style={headingStyles}>Credits</Text>
+      <Text style={textStyles}>
+        Built with React Native for macOS{'\n'}
+        A CruzUtils project for the DevOps community{'\n'}
+        MIT License © 2025
       </Text>
     </View>
   );
 };
 
-// --- Message Component ---
-interface MessageProps {
+// --- Message Box Component ---
+interface MessageBoxProps {
   type: MessageState['type'];
   text: string;
   isDark: boolean;
 }
 
-const Message = ({ type, text, isDark }: MessageProps) => {
-  const msgStyles = [
+const MessageBox = ({ type, text, isDark }: MessageBoxProps) => {
+  const messageStyles = [
     styles.message,
-    type === 'error' ? styles.messageError : 
-    type ==='success' ? styles.messageSuccess : 
-    styles.messageInfo,
+    type === 'error' && styles.messageError,
+    type === 'success' && styles.messageSuccess,
+    (type === 'info' || type === 'progress') && styles.messageInfo,
   ];
-  const msgTextStyles = [
-    styles.messageText, // Base text style
+  
+  const textStyles = [
+    styles.messageText,
     isDark ? styles.messageTextDark : styles.messageTextLight,
   ];
-  const Icon = type === 'error' ? AlertIcon : type === 'success' ? CheckIcon : InfoIcon;
+
+  const Icon = type === 'error' ? AlertIcon 
+    : type === 'success' ? CheckIcon 
+    : SpinnerIcon;
 
   return (
-    <View style={msgStyles}>
+    <View style={messageStyles}>
       <Icon />
-      <Text style={msgTextStyles}>{text}</Text>
+      <Text style={textStyles}>{text}</Text>
     </View>
   );
 };
 
 // --- Stylesheet ---
-// This is the React Native equivalent of CSS
 const styles = StyleSheet.create({
+  // App Container
   appContainer: {
     flex: 1,
-    // No paddingTop needed for macOS - StatusBar.currentHeight is Android-specific
   },
-  containerLight: { backgroundColor: '#f3f4f6' },
-  containerDark: { backgroundColor: '#111827' },
+  containerLight: { 
+    backgroundColor: '#f3f4f6' 
+  },
+  containerDark: { 
+    backgroundColor: '#111827' 
+  },
+  
+  // Layout
   layout: {
     flex: 1,
     flexDirection: 'row',
   },
+  
+  // Sidebar
   sidebar: {
-    width: 80,
-    paddingTop: 20,
-    paddingBottom: 20,
+    width: 70,
+    paddingTop: 16,
+    paddingBottom: 16,
     alignItems: 'center',
-    gap: 16,
+    gap: 8,
     borderRightWidth: 1,
   },
-  sidebarLight: { backgroundColor: '#fff', borderRightColor: '#e5e7eb' },
-  sidebarDark: { backgroundColor: '#1f2937', borderRightColor: '#374151' },
+  sidebarLight: { 
+    backgroundColor: '#ffffff', 
+    borderRightColor: '#e5e7eb' 
+  },
+  sidebarDark: { 
+    backgroundColor: '#1f2937', 
+    borderRightColor: '#374151' 
+  },
+  
+  // Navigation Button
   navButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 12,
+    width: 48,
+    height: 48,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navButtonLight: { backgroundColor: 'transparent' },
-  navButtonDark: { backgroundColor: 'transparent' },
-  navButtonActive: { backgroundColor: '#4f46e5' },
-  icon: { fontSize: 24 },
-  navIconLight: { color: '#4b5563' },
-  navIconDark: { color: '#d1d5db' },
-  navIconActive: { color: '#fff' },
+  navButtonLight: { 
+    backgroundColor: 'transparent' 
+  },
+  navButtonDark: { 
+    backgroundColor: 'transparent' 
+  },
+  navButtonActive: { 
+    backgroundColor: '#4f46e5' 
+  },
+  
+  // Main Content
   mainContent: {
     flex: 1,
-    padding: 20,
+    padding: 24,
   },
+  
+  // Page Container
   pageContainer: {
     flex: 1,
     borderRadius: 12,
-    padding: 20,
+    padding: 24,
     borderWidth: 1,
   },
-  pageContainerLight: { backgroundColor: '#fff', borderColor: '#e5e7eb' },
-  pageContainerDark: { backgroundColor: '#1f2937', borderColor: '#374151' },
+  pageContainerLight: { 
+    backgroundColor: '#ffffff', 
+    borderColor: '#e5e7eb' 
+  },
+  pageContainerDark: { 
+    backgroundColor: '#1f2937', 
+    borderColor: '#374151' 
+  },
+  
+  // Typography
   title: {
-    fontSize: 24,
-    fontWeight: '600',
+    fontSize: 26,
+    fontWeight: '700',
     marginBottom: 8,
   },
   heading: {
     fontSize: 18,
     fontWeight: '600',
-    marginTop: 16,
+    marginTop: 20,
     marginBottom: 8,
   },
   text: {
-    fontSize: 16,
+    fontSize: 15,
     lineHeight: 24,
-    marginBottom: 12,
+    marginBottom: 16,
   },
-  textLight: { color: '#374151' },
-  textDark: { color: '#d1d5db' },
+  textLight: { 
+    color: '#374151' 
+  },
+  textDark: { 
+    color: '#d1d5db' 
+  },
+  
+  // Input
   input: {
-    height: 50,
+    height: 48,
     borderWidth: 1,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     borderRadius: 8,
-    fontSize: 16,
-    marginBottom: 20,
+    fontSize: 14,
+    marginBottom: 16,
   },
   inputLight: {
-    backgroundColor: '#fff',
+    backgroundColor: '#f9fafb',
     borderColor: '#d1d5db',
-    color: '#111',
+    color: '#111827',
   },
   inputDark: {
     backgroundColor: '#374151',
     borderColor: '#4b5563',
-    color: '#fff',
+    color: '#f9fafb',
   },
+  
+  // Button
   button: {
-    height: 50,
+    height: 48,
     backgroundColor: '#4f46e5',
     borderRadius: 8,
     alignItems: 'center',
@@ -434,27 +554,76 @@ const styles = StyleSheet.create({
     backgroundColor: '#a5b4fc',
   },
   buttonText: {
-    color: '#fff',
-    fontSize: 16,
+    color: '#ffffff',
+    fontSize: 15,
     fontWeight: '600',
   },
-  message: {
+  
+  // Progress
+  progressContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    padding: 12,
+    marginTop: 16,
+    gap: 12,
+  },
+  progressBar: {
+    flex: 1,
+    height: 8,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#4f46e5',
+    borderRadius: 4,
+  },
+  progressText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    minWidth: 40,
+    textAlign: 'right',
+  },
+  progressTextDark: {
+    color: '#d1d5db',
+  },
+  
+  // Message
+  message: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 14,
     borderRadius: 8,
-    marginTop: 20,
+    marginTop: 16,
   },
-  messageError: { backgroundColor: 'rgba(239, 68, 68, 0.1)' },
-  messageSuccess: { backgroundColor: 'rgba(34, 197, 94, 0.1)' },
-  messageInfo: { backgroundColor: 'rgba(59, 130, 246, 0.1)' },
+  messageError: { 
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.2)',
+  },
+  messageSuccess: { 
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.2)',
+  },
+  messageInfo: { 
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.2)',
+  },
   messageText: {
-    flex: 1, // Allow text to wrap
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
   },
-  messageTextLight: { color: '#374151' },
-  messageTextDark: { color: '#d1d5db' },
+  messageTextLight: { 
+    color: '#374151' 
+  },
+  messageTextDark: { 
+    color: '#d1d5db' 
+  },
 });
 
 export default App;
-

@@ -825,10 +825,783 @@ vsix-downloader-native-macos/
 
 **What's Next?**
 
-In **Nano Project 3**, you'll build the user interface for the VSIX Downloader, including the sidebar navigation, input fields, and theme switching.
+In **Nano Project 3**, you'll build a modular architecture with utility functions, implement the core download logic, and add a progress indicator.
 
 ---
 
-*More Nano Projects coming as we build each phase...*
+## Nano Project 3: Building a Modular Architecture with Core Download Logic
+
+### Overview
+
+Now that you have a running React Native macOS app, it's time to build real functionality. In this Nano Project, you'll learn a fundamental software engineering principle: **separation of concerns**. Instead of putting all your code in one file, you'll create dedicated modules for specific tasks.
+
+You'll create:
+- A **URL parsing utility** that validates and extracts information from Marketplace URLs
+- A **download utility** that handles file downloads with progress tracking
+- A **settings hook** for managing user preferences with persistence
+- A **Settings page component** for configuring the download location
+
+This modular approach makes your code easier to test, maintain, and extend.
+
+### What You'll Have at the End
+
+- ✅ A `src/utils/marketplace.ts` module for URL parsing and validation
+- ✅ A `src/utils/downloader.ts` module for file download operations
+- ✅ A `src/hooks/useAppSettings.ts` custom hook for settings management
+- ✅ A `src/components/SettingsPage.tsx` component for user preferences
+- ✅ A visual download progress bar with percentage
+- ✅ Robust error handling with user-friendly messages
+
+### Prerequisites
+
+- [x] Completed Nano Project 2 (running React Native macOS app)
+- [ ] Understanding of TypeScript basics (interfaces, types, async/await)
+
+---
+
+### Tasks
+
+#### Task 1: Create the Project Structure
+
+**Why organize code into folders?**
+
+As your app grows, having all code in one file becomes unmanageable. A common React Native pattern is:
+- `src/utils/` — Pure utility functions (no React dependencies)
+- `src/hooks/` — Custom React hooks
+- `src/components/` — Reusable UI components
+
+##### Step 1.1: Create the Directory Structure
+
+```bash
+$ mkdir -p src/utils src/hooks src/components
+```
+
+**Expected Result:** Three new folders inside your project:
+```
+vsix-downloader-native-macos/
+├── src/
+│   ├── utils/
+│   ├── hooks/
+│   └── components/
+├── App.tsx
+└── ...
+```
+
+📚 **Documentation:** [React Native Project Structure Best Practices](https://reactnative.dev/docs/typescript#using-custom-path-aliases-with-typescript)
+
+---
+
+#### Task 2: Create the Marketplace URL Parser
+
+This module handles all the logic for parsing VS Code Marketplace URLs and constructing download links.
+
+##### Step 2.1: Create marketplace.ts
+
+Create the file `src/utils/marketplace.ts`:
+
+```typescript
+/**
+ * marketplace.ts
+ * 
+ * Utility functions for parsing and validating VS Code Marketplace URLs
+ * and constructing download links.
+ */
+
+// --- Type Definitions ---
+
+export interface ExtensionInfo {
+  publisher: string;
+  extensionName: string;
+  itemName: string; // Combined: publisher.extensionName
+}
+
+export interface ExtensionDetails extends ExtensionInfo {
+  version: string;
+  downloadUrl: string;
+}
+
+export interface ParseResult {
+  success: boolean;
+  data?: ExtensionInfo;
+  error?: string;
+}
+
+// --- Constants ---
+const MARKETPLACE_DOMAIN = 'marketplace.visualstudio.com';
+const MARKETPLACE_API_BASE = 'https://marketplace.visualstudio.com/_apis/public/gallery';
+
+// --- URL Validation ---
+
+/**
+ * Validates that a URL is a proper VS Code Marketplace URL
+ */
+export function isValidMarketplaceUrl(url: string): boolean {
+  if (!url || typeof url !== 'string') {
+    return false;
+  }
+  
+  const trimmedUrl = url.trim().toLowerCase();
+  return trimmedUrl.includes(MARKETPLACE_DOMAIN) && 
+         trimmedUrl.includes('/items') && 
+         trimmedUrl.includes('itemname=');
+}
+
+/**
+ * Parses a VS Code Marketplace URL and extracts extension information
+ */
+export function parseMarketplaceUrl(url: string): ParseResult {
+  const trimmedUrl = url.trim();
+  
+  if (!trimmedUrl) {
+    return { success: false, error: 'Please enter a URL.' };
+  }
+  
+  if (!isValidMarketplaceUrl(trimmedUrl)) {
+    return {
+      success: false,
+      error: 'Not a valid VS Code Marketplace URL. Expected format: https://marketplace.visualstudio.com/items?itemName=publisher.extension',
+    };
+  }
+  
+  // Extract itemName from query string
+  const queryString = trimmedUrl.split('?')[1];
+  const params = new URLSearchParams(queryString);
+  const itemName = params.get('itemName');
+  
+  if (!itemName || !itemName.includes('.')) {
+    return { success: false, error: 'Invalid extension identifier format.' };
+  }
+  
+  const parts = itemName.split('.');
+  const publisher = parts[0];
+  const extensionName = parts.slice(1).join('.');
+  
+  return {
+    success: true,
+    data: { publisher, extensionName, itemName },
+  };
+}
+
+/**
+ * Fetches the extension version from the marketplace page
+ */
+export async function fetchExtensionVersion(url: string): Promise<{
+  success: boolean;
+  version?: string;
+  error?: string;
+}> {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      },
+    });
+    
+    if (!response.ok) {
+      return {
+        success: false,
+        error: response.status === 404 
+          ? 'Extension not found.' 
+          : `HTTP error ${response.status}`,
+      };
+    }
+    
+    const pageContent = await response.text();
+    const versionMatch = pageContent.match(/"version"\s*:\s*"([\d.]+)"/);
+    
+    if (!versionMatch) {
+      return { success: false, error: 'Could not find version information.' };
+    }
+    
+    return { success: true, version: versionMatch[1] };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Network error: ${error instanceof Error ? error.message : 'Unknown'}`,
+    };
+  }
+}
+
+/**
+ * Constructs the direct download URL for a VSIX file
+ */
+export function buildDownloadUrl(
+  publisher: string, 
+  extensionName: string, 
+  version: string
+): string {
+  return `${MARKETPLACE_API_BASE}/publishers/${publisher}/vsextensions/${extensionName}/${version}/vspackage`;
+}
+
+/**
+ * Generates a filename for the downloaded VSIX
+ */
+export function generateFileName(extensionName: string, version: string): string {
+  return `${extensionName}-${version}.vsix`;
+}
+```
+
+📚 **Documentation:** 
+- [TypeScript Interfaces](https://www.typescriptlang.org/docs/handbook/2/objects.html)
+- [URLSearchParams](https://developer.mozilla.org/en-US/docs/Web/API/URLSearchParams)
+
+🔗 **Additional Resources:**
+- [VS Code Marketplace API](https://github.com/nickmomrik/vsce#publishing-extensions) — Understanding the Marketplace structure
+
+---
+
+#### Task 3: Create the Download Utility
+
+This module handles file downloads with progress tracking using `react-native-fs`.
+
+##### Step 3.1: Install react-native-fs
+
+If you haven't already:
+
+```bash
+$ npm install react-native-fs
+$ cd macos && pod install && cd ..
+```
+
+##### Step 3.2: Create downloader.ts
+
+Create the file `src/utils/downloader.ts`:
+
+```typescript
+/**
+ * downloader.ts
+ * 
+ * Utility functions for downloading files using react-native-fs
+ */
+
+import RNFS from 'react-native-fs';
+
+// --- Type Definitions ---
+
+export interface DownloadProgress {
+  bytesWritten: number;
+  contentLength: number;
+  percentage: number;
+}
+
+export interface DownloadOptions {
+  url: string;
+  fileName: string;
+  downloadPath?: string;
+  onBegin?: () => void;
+  onProgress?: (progress: DownloadProgress) => void;
+}
+
+export interface DownloadResult {
+  success: boolean;
+  filePath?: string;
+  fileSize?: number;
+  error?: string;
+}
+
+// --- Path Utilities ---
+
+/**
+ * Gets the default download directory for macOS
+ */
+export function getDefaultDownloadPath(): string {
+  return RNFS.DownloadDirectoryPath || RNFS.DocumentDirectoryPath;
+}
+
+/**
+ * Checks if a file exists at the given path
+ */
+export async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    return await RNFS.exists(filePath);
+  } catch {
+    return false;
+  }
+}
+
+// --- Download Function ---
+
+/**
+ * Downloads a file from URL to the specified location
+ */
+export async function downloadFile(options: DownloadOptions): Promise<DownloadResult> {
+  const { url, fileName, downloadPath, onBegin, onProgress } = options;
+  
+  try {
+    const directory = downloadPath || getDefaultDownloadPath();
+    const filePath = `${directory}/${fileName}`;
+    
+    const downloadResult = RNFS.downloadFile({
+      fromUrl: url,
+      toFile: filePath,
+      begin: () => onBegin?.(),
+      progress: (res) => {
+        const percentage = res.contentLength > 0
+          ? Math.round((res.bytesWritten / res.contentLength) * 100)
+          : 0;
+        onProgress?.({
+          bytesWritten: res.bytesWritten,
+          contentLength: res.contentLength,
+          percentage,
+        });
+      },
+      progressDivider: 5,
+    });
+    
+    const result = await downloadResult.promise;
+    
+    if (result.statusCode === 200) {
+      const stat = await RNFS.stat(filePath);
+      return { success: true, filePath, fileSize: stat.size };
+    }
+    
+    return {
+      success: false,
+      error: `Download failed with HTTP ${result.statusCode}`,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Download failed',
+    };
+  }
+}
+
+/**
+ * Formats bytes to human-readable size
+ */
+export function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const k = 1024;
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${units[i]}`;
+}
+```
+
+📚 **Documentation:** [react-native-fs](https://github.com/itinance/react-native-fs)
+
+💡 **Key Concept: Callbacks for Progress**
+
+Notice the `onProgress` callback pattern. This is how we pass real-time progress updates from the utility back to the UI. The utility doesn't know anything about React — it just calls the callback with data.
+
+---
+
+#### Task 4: Create the Settings Hook
+
+Custom hooks are a powerful React pattern for encapsulating stateful logic.
+
+##### Step 4.1: Create useAppSettings.ts
+
+Create the file `src/hooks/useAppSettings.ts`:
+
+```typescript
+/**
+ * useAppSettings.ts
+ * 
+ * Custom hook for managing application settings with persistence
+ */
+
+import { useState, useEffect, useCallback } from 'react';
+import RNFS from 'react-native-fs';
+
+// --- Type Definitions ---
+
+export interface AppSettings {
+  downloadPath: string;
+  theme: 'light' | 'dark' | 'system';
+  autoOpenAfterDownload: boolean;
+  confirmBeforeDownload: boolean;
+}
+
+const SETTINGS_FILE = `${RNFS.DocumentDirectoryPath}/vsix-downloader-settings.json`;
+
+function getDefaultSettings(): AppSettings {
+  return {
+    downloadPath: RNFS.DownloadDirectoryPath || RNFS.DocumentDirectoryPath,
+    theme: 'light',
+    autoOpenAfterDownload: false,
+    confirmBeforeDownload: false,
+  };
+}
+
+export function useAppSettings() {
+  const [settings, setSettings] = useState<AppSettings>(getDefaultSettings());
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Load settings from file
+  const loadSettings = useCallback(async () => {
+    try {
+      const exists = await RNFS.exists(SETTINGS_FILE);
+      if (exists) {
+        const content = await RNFS.readFile(SETTINGS_FILE, 'utf8');
+        const parsed = JSON.parse(content);
+        setSettings({ ...getDefaultSettings(), ...parsed });
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Save settings to file
+  const saveSettings = useCallback(async (newSettings: AppSettings) => {
+    try {
+      await RNFS.writeFile(SETTINGS_FILE, JSON.stringify(newSettings, null, 2), 'utf8');
+    } catch (error) {
+      console.error('Error saving settings:', error);
+    }
+  }, []);
+
+  // Update a single setting
+  const updateSetting = useCallback(async <K extends keyof AppSettings>(
+    key: K,
+    value: AppSettings[K]
+  ) => {
+    const newSettings = { ...settings, [key]: value };
+    setSettings(newSettings);
+    await saveSettings(newSettings);
+  }, [settings, saveSettings]);
+
+  // Reset to defaults
+  const resetSettings = useCallback(async () => {
+    const defaults = getDefaultSettings();
+    setSettings(defaults);
+    await saveSettings(defaults);
+  }, [saveSettings]);
+
+  // Load on mount
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
+
+  return { settings, isLoading, updateSetting, resetSettings };
+}
+```
+
+📚 **Documentation:** 
+- [Custom Hooks](https://react.dev/learn/reusing-logic-with-custom-hooks)
+- [useCallback](https://react.dev/reference/react/useCallback)
+
+💡 **Key Concept: Why Custom Hooks?**
+
+Custom hooks let you extract component logic into reusable functions. The `useAppSettings` hook handles:
+1. Loading settings from disk
+2. Saving settings to disk
+3. Providing settings to components
+4. Resetting to defaults
+
+Any component can use `const { settings } = useAppSettings()` to access the settings.
+
+---
+
+#### Task 5: Create the Settings Page Component
+
+##### Step 5.1: Create SettingsPage.tsx
+
+Create `src/components/SettingsPage.tsx`. This component allows users to configure their download location.
+
+```typescript
+/**
+ * SettingsPage.tsx
+ * 
+ * Settings page component for configuring download preferences
+ */
+
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  Switch,
+} from 'react-native';
+import { AppSettings } from '../hooks/useAppSettings';
+import { getDefaultDownloadPath } from '../utils/downloader';
+
+interface SettingsPageProps {
+  isDark: boolean;
+  settings: AppSettings;
+  onUpdateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => Promise<void>;
+  onResetSettings: () => Promise<void>;
+}
+
+export const SettingsPage: React.FC<SettingsPageProps> = ({
+  isDark,
+  settings,
+  onUpdateSetting,
+  onResetSettings,
+}) => {
+  const [downloadPath, setDownloadPath] = useState(settings.downloadPath);
+
+  // Sync local state with props
+  useEffect(() => {
+    setDownloadPath(settings.downloadPath);
+  }, [settings.downloadPath]);
+
+  const handleSavePath = async () => {
+    await onUpdateSetting('downloadPath', downloadPath);
+  };
+
+  const handleResetToDefault = async () => {
+    const defaultPath = getDefaultDownloadPath();
+    setDownloadPath(defaultPath);
+    await onUpdateSetting('downloadPath', defaultPath);
+  };
+
+  // Dynamic styles based on theme
+  const containerStyle = [
+    styles.container,
+    isDark ? styles.containerDark : styles.containerLight,
+  ];
+
+  return (
+    <ScrollView style={containerStyle}>
+      <Text style={[styles.title, isDark && styles.textDark]}>Settings</Text>
+
+      {/* Download Location */}
+      <View style={[styles.section, isDark && styles.sectionDark]}>
+        <Text style={[styles.label, isDark && styles.textDark]}>
+          Download Location
+        </Text>
+        <Text style={[styles.description, isDark && styles.descriptionDark]}>
+          Where VSIX files will be saved. Default is ~/Downloads.
+        </Text>
+        
+        <TextInput
+          style={[styles.input, isDark && styles.inputDark]}
+          value={downloadPath}
+          onChangeText={setDownloadPath}
+          placeholder="/path/to/downloads"
+        />
+        
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={styles.secondaryButton} onPress={handleResetToDefault}>
+            <Text style={styles.secondaryButtonText}>Reset to Default</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.primaryButton} onPress={handleSavePath}>
+            <Text style={styles.primaryButtonText}>Save</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Preferences */}
+      <View style={[styles.section, isDark && styles.sectionDark]}>
+        <Text style={[styles.label, isDark && styles.textDark]}>Preferences</Text>
+        
+        <View style={styles.settingRow}>
+          <Text style={[styles.settingLabel, isDark && styles.textDark]}>
+            Confirm Before Download
+          </Text>
+          <Switch
+            value={settings.confirmBeforeDownload}
+            onValueChange={(v) => onUpdateSetting('confirmBeforeDownload', v)}
+            trackColor={{ true: '#4f46e5' }}
+          />
+        </View>
+      </View>
+    </ScrollView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 20 },
+  containerLight: { backgroundColor: '#f3f4f6' },
+  containerDark: { backgroundColor: '#111827' },
+  title: { fontSize: 24, fontWeight: '600', marginBottom: 20, color: '#111' },
+  textDark: { color: '#f9fafb' },
+  section: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  sectionDark: { backgroundColor: '#1f2937', borderColor: '#374151' },
+  label: { fontSize: 16, fontWeight: '600', marginBottom: 4, color: '#111' },
+  description: { fontSize: 14, color: '#6b7280', marginBottom: 12 },
+  descriptionDark: { color: '#9ca3af' },
+  input: {
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    borderColor: '#d1d5db',
+    backgroundColor: '#f9fafb',
+    color: '#111',
+  },
+  inputDark: { backgroundColor: '#374151', borderColor: '#4b5563', color: '#f9fafb' },
+  buttonRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  primaryButton: {
+    flex: 1,
+    height: 40,
+    backgroundColor: '#4f46e5',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryButtonText: { color: '#fff', fontWeight: '600' },
+  secondaryButton: {
+    flex: 1,
+    height: 40,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  secondaryButtonText: { color: '#374151', fontWeight: '600' },
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+  },
+  settingLabel: { fontSize: 15, color: '#111' },
+});
+
+export default SettingsPage;
+```
+
+📚 **Documentation:** [React Native Switch](https://reactnative.dev/docs/switch)
+
+---
+
+#### Task 6: Update App.tsx to Use the New Modules
+
+Now integrate everything into your main App.tsx. The key changes:
+
+1. Import the new utilities and components
+2. Add a "Settings" navigation button
+3. Use `useAppSettings` hook for settings management
+4. Add a progress bar component
+5. Use the modular download flow
+
+##### Step 6.1: Key Imports
+
+At the top of your `App.tsx`:
+
+```typescript
+// Utilities
+import { getExtensionDetails, generateFileName } from './src/utils/marketplace';
+import { downloadFile, formatFileSize, DownloadProgress } from './src/utils/downloader';
+import { useAppSettings } from './src/hooks/useAppSettings';
+
+// Components
+import { SettingsPage } from './src/components/SettingsPage';
+```
+
+##### Step 6.2: Add Progress Bar
+
+Add a progress bar component to show download progress:
+
+```typescript
+{/* Progress Bar */}
+{message.type === 'progress' && typeof message.progress === 'number' && (
+  <View style={styles.progressContainer}>
+    <View style={styles.progressBar}>
+      <View 
+        style={[styles.progressFill, { width: `${message.progress}%` }]} 
+      />
+    </View>
+    <Text style={styles.progressText}>{message.progress}%</Text>
+  </View>
+)}
+```
+
+With styles:
+
+```typescript
+progressContainer: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginTop: 16,
+  gap: 12,
+},
+progressBar: {
+  flex: 1,
+  height: 8,
+  backgroundColor: '#e5e7eb',
+  borderRadius: 4,
+  overflow: 'hidden',
+},
+progressFill: {
+  height: '100%',
+  backgroundColor: '#4f46e5',
+  borderRadius: 4,
+},
+progressText: {
+  fontSize: 14,
+  fontWeight: '600',
+  color: '#374151',
+},
+```
+
+📚 **Documentation:** [React Native Styling](https://reactnative.dev/docs/style)
+
+---
+
+### Summary & Verification
+
+**Congratulations!** You have completed Nano Project 3: Building a Modular Architecture with Core Download Logic.
+
+At this point, you should have:
+
+- ✅ `src/utils/marketplace.ts` — URL parsing and validation
+- ✅ `src/utils/downloader.ts` — File download with progress
+- ✅ `src/hooks/useAppSettings.ts` — Settings management
+- ✅ `src/components/SettingsPage.tsx` — Settings UI
+- ✅ A working progress bar during downloads
+- ✅ Configurable download location
+
+**Updated Project Structure:**
+```
+vsix-downloader-native-macos/
+├── App.tsx
+├── index.js
+├── src/
+│   ├── utils/
+│   │   ├── marketplace.ts    # URL parsing
+│   │   └── downloader.ts     # File downloads
+│   ├── hooks/
+│   │   └── useAppSettings.ts # Settings hook
+│   └── components/
+│       └── SettingsPage.tsx  # Settings UI
+├── macos/
+└── ...
+```
+
+**Verification Checklist:**
+
+| Feature | How to Test |
+|---------|-------------|
+| URL validation | Enter invalid URL → Should show error |
+| URL parsing | Enter valid URL → Should extract publisher/extension |
+| Download progress | Start download → Should show progress bar |
+| Settings page | Click Settings icon → Should show preferences |
+| Save path | Change path in settings → Should persist after restart |
+
+**🛠️ Troubleshooting**
+
+1. **Import errors:** Make sure file paths match exactly. TypeScript is case-sensitive.
+
+2. **Settings not persisting:** Check that `RNFS.DocumentDirectoryPath` is accessible.
+
+3. **Progress not updating:** Ensure `progressDivider` is set in download options.
+
+4. **Download fails:** Check network connectivity and URL validity.
+
+---
+
+**What's Next?**
+
+In **Nano Project 4**, you'll polish the UI with proper icons, refine the dark mode, and add the finishing touches before testing and building for distribution.
+
+---
+
+*More Nano Projects coming as we complete each phase...*
 
 
