@@ -1,0 +1,33 @@
+First rough description of the features:
+ - There is a VSCode Extension that is in the VSCode 
+ marketplace https://marketplace.visualstudio.com/items?itemName=aaravb.chrome-extension-developer-tools 
+ but doesn't show up when I clidk on The extensions button on Cursor. 
+ So I went to https://open-vsx.org/ to see if I could download the 
+ vsix and manually install it on Cursor so is not there. I did to see 
+ if I could do it installed it on VSCode. How do I get the vsix so I can install this extension on Cursor?
+ 
+ - So, it's been a while since I asked this question, the 
+ Option 1  worked for me, but I'm a little confused so I'm wondering if I could build the link for this extention 
+ for me and second if you could create for me a python script which ever you feel is best suited 
+ (there are a few considerations for that decision and I will let you decide) what I want is to be able to 
+ run the script from terminal by just passing it this type of url which is super easy for me to 
+ get https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer and have python script receive it the 
+ url as a param and construct the url for the download url. 
+ I would like to use to call it is something like if python then:: 
+ 
+ python construct_vsix_download_link.py 'https://marketplace.visualstudio.com/items?itemName=hediet.debug-visualizer' 
+ and then the output spits out the correctly formatted vsix download link
+
+ - This looks really great! Here is my question.  
+ What if I want to pivot and build this to run like a native app using React Native.  
+ I like the utility of the tool a lot, I can just go to the marketplace url and .vsix 
+ and install it in Cursor and don't give it a second thought.  
+ I think I might want to  make this available to the devops team 
+ I'm on, can you create a React Native app to run on macOS and Windows 
+ that will allow the user to put the market place url press a submit button and start downloading the .vsix 
+ to the Download directory as default, have this interface be the primary and default view of the app and have a 
+ side tab bar for the user to change the Download file location if they wish it to be something other than the system 
+ standard Download folder?
+
+ -Gem, great design, I think this is a great starter for me.  Can you add to this web application that you so awesomely 
+ created a button on the tab bar or elsewhere that is a dark mode button and provide a dark mode version when clicked?
