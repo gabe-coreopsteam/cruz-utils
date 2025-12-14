@@ -36,5 +36,8 @@
     },
     "jest": {
         "preset": "react-native"
+    },
+    "overrides": {
+        "@react-native-community/cli@<=17.0.1": "17.0.1"
     }
 }
